@@ -1,18 +1,19 @@
 export const CONFIG = {
   duracionAmarilloMs: 400, // milisegundos
   intervaloPuntajeMs: 30_000, // milisegundos por punto
-  velocidadInicialUnidadesPorSegundo: 24, // unidades por segundo
+  velocidadInicialUnidadesPorSegundo: 28, // unidades por segundo
   aumentoVelocidadPorPuntoUnidadesPorSegundo: 4, // unidades por segundo por punto
-  intervaloInicialAutosMs: 2_400, // milisegundos entre apariciones
+  intervaloInicialAutosMs: 1_800, // milisegundos entre oleadas
   reduccionIntervaloPorPuntoMs: 180, // milisegundos menos por punto
   intervaloMinimoAutosMs: 450, // milisegundos entre apariciones
   distanciaAparicionUnidades: 180, // unidades desde el centro
-  distanciaLineaUnidades: 30, // unidades desde el centro
-  distanciaSalidaUnidades: 40, // unidades más allá del centro
-  separacionAutosUnidades: 4, // unidades entre autos
+  distanciaLineaUnidades: 78, // unidades desde el centro
+  distanciaSalidaUnidades: 210, // unidades más allá del centro
+  separacionAutosUnidades: 14, // unidades entre autos
+  desplazamientoZigzagUnidades: 3, // unidades hacia cada lado del carril
   largoAutoUnidades: 18, // unidades
   anchoAutoUnidades: 8, // unidades
-  separacionCarrilesUnidades: 10, // unidades desde el centro
+  separacionCarrilesUnidades: 8, // unidades desde el centro
   distanciaRiesgoUnidades: 70, // unidades desde el centro
   pasoSimulacionMs: 16, // milisegundos
   milisegundosPorSegundo: 1_000, // milisegundos por segundo
@@ -33,6 +34,7 @@ export interface Auto {
   id: number
   direccion: Direccion
   distanciaCentro: number
+  desplazamientoLateralUnidades: number
   velocidadUnidadesPorSegundo: number
 }
 
@@ -78,11 +80,17 @@ function intervaloAparicion(puntos: number): number {
   )
 }
 
-function crearAuto(id: number, direccion: Direccion, puntos: number): Auto {
+function crearAuto(
+  id: number,
+  direccion: Direccion,
+  puntos: number,
+  desplazamientoLateralUnidades: number,
+): Auto {
   return {
     id,
     direccion,
     distanciaCentro: CONFIG.distanciaAparicionUnidades,
+    desplazamientoLateralUnidades,
     velocidadUnidadesPorSegundo:
       CONFIG.velocidadInicialUnidadesPorSegundo +
       puntos * CONFIG.aumentoVelocidadPorPuntoUnidadesPorSegundo,
@@ -95,7 +103,12 @@ export function crearEstadoInicial(
 ): EstadoJuego {
   const semillaNormalizada = (semilla >>> 0) || CONFIG.semillaPredeterminada
   const autos = DIRECCIONES.map((direccion, indice) =>
-    crearAuto(CONFIG.primerIdentificadorAuto + indice, direccion, 0),
+    crearAuto(
+      CONFIG.primerIdentificadorAuto + indice,
+      direccion,
+      0,
+      CONFIG.desplazamientoZigzagUnidades,
+    ),
   )
 
   return {
@@ -140,16 +153,17 @@ export function cambiarSemaforo(estado: EstadoJuego, ejeDestino: Eje): boolean {
 
 function obtenerPosicion(auto: Auto): { x: number; y: number; orientacion: Eje } {
   const carril = CONFIG.separacionCarrilesUnidades
+  const desplazamiento = auto.desplazamientoLateralUnidades
 
   switch (auto.direccion) {
     case 'arriba':
-      return { x: -carril, y: -auto.distanciaCentro, orientacion: 'vertical' }
+      return { x: -carril + desplazamiento, y: -auto.distanciaCentro, orientacion: 'vertical' }
     case 'abajo':
-      return { x: carril, y: auto.distanciaCentro, orientacion: 'vertical' }
+      return { x: carril + desplazamiento, y: auto.distanciaCentro, orientacion: 'vertical' }
     case 'izquierda':
-      return { x: -auto.distanciaCentro, y: carril, orientacion: 'horizontal' }
+      return { x: -auto.distanciaCentro, y: carril + desplazamiento, orientacion: 'horizontal' }
     case 'derecha':
-      return { x: auto.distanciaCentro, y: -carril, orientacion: 'horizontal' }
+      return { x: auto.distanciaCentro, y: -carril + desplazamiento, orientacion: 'horizontal' }
   }
 }
 
@@ -188,8 +202,8 @@ function puedeAparecer(estado: EstadoJuego, direccion: Direccion): boolean {
 
   return (
     autosMismaDireccion.length === 0 ||
-    autoMasLejano >=
-      CONFIG.distanciaAparicionUnidades + CONFIG.largoAutoUnidades + CONFIG.separacionAutosUnidades
+    autoMasLejano <=
+      CONFIG.distanciaAparicionUnidades - CONFIG.largoAutoUnidades - CONFIG.separacionAutosUnidades
   )
 }
 
@@ -197,12 +211,26 @@ function intentarAparicion(estado: EstadoJuego): void {
   const direccionesDisponibles = DIRECCIONES.filter((direccion) => puedeAparecer(estado, direccion))
   if (direccionesDisponibles.length === 0) return
 
-  const indice = Math.floor(estado.generarAleatorio() * direccionesDisponibles.length)
-  const direccion = direccionesDisponibles[indice]
-  if (direccion === undefined) return
+  for (const direccion of direccionesDisponibles) {
+    const ultimoAuto = estado.autos
+      .filter((auto) => auto.direccion === direccion)
+      .reduce<Auto | undefined>(
+        (ultimo, auto) => (ultimo === undefined || auto.id > ultimo.id ? auto : ultimo),
+        undefined,
+      )
+    const desplazamientoAnterior =
+      ultimoAuto?.desplazamientoLateralUnidades ?? -CONFIG.desplazamientoZigzagUnidades
+    const desplazamientoSiguiente =
+      desplazamientoAnterior === CONFIG.desplazamientoZigzagUnidades
+        ? -CONFIG.desplazamientoZigzagUnidades
+        : CONFIG.desplazamientoZigzagUnidades
 
-  estado.autos.push(crearAuto(estado.proximoIdAuto, direccion, estado.puntos))
-  estado.proximoIdAuto += 1
+    estado.autos.push(
+      crearAuto(estado.proximoIdAuto, direccion, estado.puntos, desplazamientoSiguiente),
+    )
+    estado.proximoIdAuto += 1
+  }
+
   estado.tiempoParaNuevoAutoMs = intervaloAparicion(estado.puntos)
 }
 
@@ -211,7 +239,7 @@ function avanzarAutos(estado: EstadoJuego, deltaMs: number): void {
 
   for (const auto of autosOrdenados) {
     const eje = obtenerEje(auto.direccion)
-    const avanza = estado.semaforos[eje] === 'verde' || auto.distanciaCentro < CONFIG.distanciaLineaUnidades
+    const avanza = estado.semaforos[eje] === 'verde' || auto.distanciaCentro > CONFIG.distanciaLineaUnidades
     if (!avanza) continue
 
     const recorrido = auto.velocidadUnidadesPorSegundo * (deltaMs / CONFIG.milisegundosPorSegundo)
